@@ -259,7 +259,10 @@ def fetch_latest_bucket(_kite, chain_key: str, chain: pd.DataFrame, interval_lab
         "Volume_SMA", "Volume_Ratio", "OBV",
     ]
     numeric_cols = result.select_dtypes(include=[np.number]).columns
-    result[numeric_cols] = result[numeric_cols].round(2)
+    whole_cols = [c for c in numeric_cols if c != "Volume_Ratio"]
+    result[whole_cols] = result[whole_cols].round(0).astype("Int64")
+    if "Volume_Ratio" in numeric_cols:
+        result["Volume_Ratio"] = result["Volume_Ratio"].round(2)
     return result[cols].reset_index(drop=True)
 
 
