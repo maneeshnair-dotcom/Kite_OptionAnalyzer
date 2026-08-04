@@ -182,16 +182,26 @@ def add_peak_trough(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ── Chain + data fetch (cached per interval, TTL matches refresh cadence) ─
-@st.cache_data(ttl=60, show_spinner=False)
-def get_atm_chain(_kite, atm_range: int) -> pd.DataFrame:
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_nifty_option_instruments(_kite) -> pd.DataFrame:
     instruments = pd.DataFrame(_kite.instruments("NFO"))
     opts = instruments[(instruments["name"] == "NIFTY") & (instruments["segment"] == "NFO-OPT")].copy()
     opts["expiry"] = pd.to_datetime(opts["expiry"])
-    today = pd.Timestamp(now_ist().date())
-    nearest_expiry = opts.loc[opts["expiry"] >= today, "expiry"].min()
-    chain = opts[opts["expiry"] == nearest_expiry].copy()
+    return opts
 
-    spot = _kite.quote(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
+
+def get_available_expiries(opts: pd.DataFrame) -> list:
+    today = pd.Timestamp(now_ist().date())
+    return sorted(opts.loc[opts["expiry"] >= today, "expiry"].dt.date.unique())
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_nifty_spot(_kite) -> float:
+    return _kite.quote(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
+
+
+def get_atm_chain(opts: pd.DataFrame, spot: float, atm_range: int, expiry_date) -> pd.DataFrame:
+    chain = opts[opts["expiry"].dt.date == expiry_date].copy()
     atm_strike = round(spot / STRIKE_STEP) * STRIKE_STEP
     lo, hi = atm_strike - atm_range * STRIKE_STEP, atm_strike + atm_range * STRIKE_STEP
 
@@ -241,11 +251,12 @@ def fetch_latest_bucket(_kite, chain_key: str, chain: pd.DataFrame, interval_lab
 
     result = pd.DataFrame(rows)
     cols = [
-        "Tradingsymbol", "Strike", "Type", "Expiry", "Date",
+        "Strike", "Type", "Diff_Peak", "Diff_Trough", "Volume_Signal", "Volume_Trend",
+        "Tradingsymbol", "Expiry", "Date",
         "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME",
-        "WMA", "LSMA", "LSMA-WMA", "Diff_Peak", "Diff_Trough",
+        "WMA", "LSMA", "LSMA-WMA",
         "Gann_Resistance", "Gann_Support", "Gann_Reversal_Zone",
-        "Volume_SMA", "Volume_Ratio", "OBV", "Volume_Trend", "Volume_Signal",
+        "Volume_SMA", "Volume_Ratio", "OBV",
     ]
     numeric_cols = result.select_dtypes(include=[np.number]).columns
     result[numeric_cols] = result[numeric_cols].round(2)
@@ -263,6 +274,15 @@ def highlight_row(row):
 # ── UI ────────────────────────────────────────────────────────────────
 st.title("NIFTY Options — ATM ±5 Dashboard")
 
+# Compact styling so more rows/columns fit without scrolling.
+st.markdown("""
+<style>
+[data-testid="stTable"] table { font-size: 12px; }
+[data-testid="stTable"] th, [data-testid="stTable"] td { padding: 2px 8px !important; }
+div.block-container { padding-top: 1.5rem; }
+</style>
+""", unsafe_allow_html=True)
+
 api_key, api_secret, access_token = get_credentials()
 
 # Process a Kite login redirect (request_token in the URL) before anything else.
@@ -272,10 +292,24 @@ handle_kite_login_callback(api_key, api_secret)
 if "access_token" in st.session_state:
     access_token = st.session_state["access_token"]
 
+kite = get_kite_client(api_key, access_token) if access_token else None
+
+opts, expiries = None, []
+if kite:
+    try:
+        opts = get_nifty_option_instruments(kite)
+        expiries = get_available_expiries(opts)
+    except Exception as e:
+        st.sidebar.error(f"Could not load instruments: {e}")
+
 with st.sidebar:
     st.header("Settings")
     interval_label = st.selectbox("Interval", list(INTERVAL_MAP.keys()), index=0)
     atm_range = st.number_input("ATM ± strikes", min_value=1, max_value=10, value=5)
+    expiry_date = st.selectbox(
+        "Expiry", expiries, index=0, disabled=not expiries,
+        format_func=lambda d: d.strftime("%d-%b-%Y (%a)"),
+    ) if expiries else None
     auto_run = st.checkbox("Auto refresh", value=False)
     refresh_secs = st.slider("Refresh every (sec)", 15, 300, 60, step=15, disabled=not auto_run)
 
@@ -305,37 +339,30 @@ with st.sidebar:
     if not access_token:
         access_token = st.text_input("Or paste an access token manually", type="password")
 
-if not access_token:
+if not access_token or not expiry_date:
     st.info("Log in via the sidebar button (or paste a token) to load the dashboard.")
     st.stop()
 
-kite = get_kite_client(api_key, access_token)
-
-try:
-    chain = get_atm_chain(kite, atm_range)
-except Exception as e:
-    st.error(f"Failed to load option chain: {e}")
-    st.stop()
-
-spot = chain.attrs.get("spot")
+spot = get_nifty_spot(kite)
+chain = get_atm_chain(opts, spot, atm_range, expiry_date)
 atm_strike = chain.attrs.get("atm_strike")
-expiry = chain["expiry"].iloc[0].date() if not chain.empty else None
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("NIFTY Spot", f"{spot:,.2f}" if spot else "—")
 c2.metric("ATM Strike", atm_strike or "—")
-c3.metric("Expiry", str(expiry) if expiry else "—")
+c3.metric("Expiry", str(expiry_date))
 c4.metric("Interval", interval_label)
 
-data = fetch_latest_bucket(kite, f"{expiry}-{atm_range}", chain, interval_label)
+data = fetch_latest_bucket(kite, f"{expiry_date}-{atm_range}", chain, interval_label)
 
 if data.empty:
     st.warning("No data returned — check Historical Data API permission on your Kite Connect app.")
 else:
     st.caption(f"Latest bucket per contract · last updated {now_ist().strftime('%H:%M:%S')} IST")
-    st.dataframe(data.style.apply(highlight_row, axis=1), use_container_width=True, hide_index=True)
+    styled = data.style.apply(highlight_row, axis=1)
+    st.table(styled)
 
     signals = data[(data["Volume_Signal"] != "") | (data["Diff_Peak"] != "") | (data["Diff_Trough"] != "")]
     if not signals.empty:
         st.subheader("Active signals this bucket")
-        st.dataframe(signals, use_container_width=True, hide_index=True)
+        st.table(signals.style.apply(highlight_row, axis=1))
