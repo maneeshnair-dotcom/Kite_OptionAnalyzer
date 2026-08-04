@@ -22,6 +22,7 @@ Deploy on Streamlit Community Cloud:
 
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,16 @@ try:
     AUTOREFRESH_OK = True
 except ImportError:
     AUTOREFRESH_OK = False
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def now_ist() -> datetime:
+    """Naive IST datetime. Kite's API always interprets datetimes as IST,
+    but Streamlit Cloud's servers run in UTC — datetime.now() there would
+    return a UTC clock reading and silently shift every historical query,
+    so every "now" in this app must go through this helper instead."""
+    return datetime.now(IST).replace(tzinfo=None)
 
 # ── Config ─────────────────────────────────────────────────────────────
 DEFAULT_API_KEY = "k5d3p1syii84wrz9"
@@ -68,8 +79,8 @@ def token_status() -> str:
     so a token file not written today is almost certainly stale."""
     if not os.path.exists(TOKEN_FILE):
         return "missing"
-    mtime = datetime.fromtimestamp(os.path.getmtime(TOKEN_FILE))
-    return "fresh" if mtime.date() == datetime.now().date() else "stale"
+    mtime = datetime.fromtimestamp(os.path.getmtime(TOKEN_FILE), tz=IST).replace(tzinfo=None)
+    return "fresh" if mtime.date() == now_ist().date() else "stale"
 
 
 def save_token(access_token: str):
@@ -176,7 +187,7 @@ def get_atm_chain(_kite, atm_range: int) -> pd.DataFrame:
     instruments = pd.DataFrame(_kite.instruments("NFO"))
     opts = instruments[(instruments["name"] == "NIFTY") & (instruments["segment"] == "NFO-OPT")].copy()
     opts["expiry"] = pd.to_datetime(opts["expiry"])
-    today = pd.Timestamp.now().normalize()
+    today = pd.Timestamp(now_ist().date())
     nearest_expiry = opts.loc[opts["expiry"] >= today, "expiry"].min()
     chain = opts[opts["expiry"] == nearest_expiry].copy()
 
@@ -196,7 +207,7 @@ def get_atm_chain(_kite, atm_range: int) -> pd.DataFrame:
 def fetch_latest_bucket(_kite, chain_key: str, chain: pd.DataFrame, interval_label: str) -> pd.DataFrame:
     interval = INTERVAL_MAP[interval_label]
     days = LOOKBACK_DAYS[interval_label]
-    to_date = datetime.now()
+    to_date = now_ist()
     from_date = to_date - timedelta(days=days)
 
     rows = []
@@ -321,7 +332,7 @@ data = fetch_latest_bucket(kite, f"{expiry}-{atm_range}", chain, interval_label)
 if data.empty:
     st.warning("No data returned — check Historical Data API permission on your Kite Connect app.")
 else:
-    st.caption(f"Latest bucket per contract · last updated {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Latest bucket per contract · last updated {now_ist().strftime('%H:%M:%S')} IST")
     st.dataframe(data.style.apply(highlight_row, axis=1), use_container_width=True, hide_index=True)
 
     signals = data[(data["Volume_Signal"] != "") | (data["Diff_Peak"] != "") | (data["Diff_Trough"] != "")]
