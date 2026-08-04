@@ -292,24 +292,10 @@ handle_kite_login_callback(api_key, api_secret)
 if "access_token" in st.session_state:
     access_token = st.session_state["access_token"]
 
-kite = get_kite_client(api_key, access_token) if access_token else None
-
-opts, expiries = None, []
-if kite:
-    try:
-        opts = get_nifty_option_instruments(kite)
-        expiries = get_available_expiries(opts)
-    except Exception as e:
-        st.sidebar.error(f"Could not load instruments: {e}")
-
 with st.sidebar:
     st.header("Settings")
     interval_label = st.selectbox("Interval", list(INTERVAL_MAP.keys()), index=0)
     atm_range = st.number_input("ATM ± strikes", min_value=1, max_value=10, value=5)
-    expiry_date = st.selectbox(
-        "Expiry", expiries, index=0, disabled=not expiries,
-        format_func=lambda d: d.strftime("%d-%b-%Y (%a)"),
-    ) if expiries else None
     auto_run = st.checkbox("Auto refresh", value=False)
     refresh_secs = st.slider("Refresh every (sec)", 15, 300, 60, step=15, disabled=not auto_run)
 
@@ -338,6 +324,23 @@ with st.sidebar:
 
     if not access_token:
         access_token = st.text_input("Or paste an access token manually", type="password")
+
+# Build the client (and pull the expiry list) only now, so a token typed into
+# the box above this run is already reflected in `access_token`.
+kite = get_kite_client(api_key, access_token) if access_token else None
+
+opts, expiries = None, []
+if kite:
+    try:
+        opts = get_nifty_option_instruments(kite)
+        expiries = get_available_expiries(opts)
+    except Exception as e:
+        st.sidebar.error(f"Could not load instruments: {e}")
+
+expiry_date = st.sidebar.selectbox(
+    "Expiry", expiries, index=0, disabled=not expiries,
+    format_func=lambda d: d.strftime("%d-%b-%Y (%a)"),
+) if expiries else None
 
 if not access_token or not expiry_date:
     st.info("Log in via the sidebar button (or paste a token) to load the dashboard.")
