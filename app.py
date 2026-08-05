@@ -48,8 +48,9 @@ TOKEN_FILE = "kite_token.txt"
 # Segments to search for a given underlying's option chain.
 SEGMENTS = ["NFO", "BFO", "CDS", "MCX"]
 
-INTERVAL_MAP = {"15 min": "15minute", "30 min": "30minute", "1 hr": "60minute"}
-LOOKBACK_DAYS = {"15 min": 3, "30 min": 5, "1 hr": 10}
+INTERVAL_MAP = {"15 min": "15minute", "30 min": "30minute", "1 hr": "60minute", "4 hr": "60minute"}
+LOOKBACK_DAYS = {"15 min": 3, "30 min": 5, "1 hr": 10, "4 hr": 15}
+RESAMPLE_INTERVALS = {"4 hr": "4h"}  # label -> pandas resample rule, applied after fetch
 WMA_WINDOW = 5
 LSMA_WINDOW = 7
 VOL_SMA_WINDOW = 10
@@ -311,6 +312,19 @@ def add_peak_trough(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def resample_candles(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Roll up finer candles (e.g. 60min) into coarser ones (e.g. 4h).
+    Bins anchor to local midnight, so an NSE 09:15-15:30 session lines up
+    into two real 4h candles: 08:00-12:00 and 12:00-16:00."""
+    if df.empty:
+        return df
+    indexed = df.set_index(pd.to_datetime(df["Date"]).dt.tz_localize(None))
+    agg = {"OPEN": "first", "HIGH": "max", "LOW": "min", "CLOSE": "last", "VOLUME": "sum"}
+    out = indexed.resample(rule).agg(agg)
+    out = out.dropna(subset=["OPEN", "HIGH", "LOW", "CLOSE"], how="all")
+    return out.reset_index().rename(columns={"index": "Date", "Date": "Date"})
+
+
 def highlight_row(row):
     if row.get("Gann_Reversal_Zone") == "Resistance":
         return ["background-color: #4B1217"] * len(row)
@@ -340,6 +354,10 @@ def fetch_latest_bucket(_kite, cache_key: str, chain: pd.DataFrame, interval_lab
             "date": "Date", "open": "OPEN", "high": "HIGH",
             "low": "LOW", "close": "CLOSE", "volume": "VOLUME",
         })
+        if interval_label in RESAMPLE_INTERVALS:
+            df = resample_candles(df, RESAMPLE_INTERVALS[interval_label])
+        if df.empty:
+            continue
         df["WMA"] = calculate_wma(df["CLOSE"], WMA_WINDOW)
         df["LSMA"] = calculate_lsma(df["CLOSE"], LSMA_WINDOW)
         df = add_peak_trough(df)
