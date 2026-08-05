@@ -14,6 +14,7 @@ Run locally:
 """
 
 import os
+import time
 from collections import Counter
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -343,11 +344,17 @@ def fetch_latest_bucket(_kite, cache_key: str, chain: pd.DataFrame, interval_lab
 
     rows = []
     for _, row in chain.iterrows():
-        try:
-            candles = _kite.historical_data(row["instrument_token"], from_date, to_date, interval)
-        except Exception as e:
-            st.warning(f"{row['tradingsymbol']}: historical fetch failed ({e})")
-            continue
+        candles = None
+        for attempt in range(2):  # one retry on transient/rate-limit style failures
+            try:
+                candles = _kite.historical_data(row["instrument_token"], from_date, to_date, interval)
+                break
+            except Exception as e:
+                if attempt == 0:
+                    time.sleep(1.0)
+                    continue
+                st.warning(f"{row['tradingsymbol']}: historical fetch failed ({e})")
+        time.sleep(0.34)  # stay under Kite's ~3 req/sec historical-data rate limit
         if not candles:
             continue
         df = pd.DataFrame(candles).rename(columns={
