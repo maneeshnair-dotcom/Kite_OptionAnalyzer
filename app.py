@@ -52,9 +52,9 @@ SEGMENTS = ["NFO", "BFO", "CDS", "MCX"]
 INTERVAL_MAP = {"15 min": "15minute", "30 min": "30minute", "1 hr": "60minute", "4 hr": "60minute"}
 LOOKBACK_DAYS = {"15 min": 3, "30 min": 5, "1 hr": 10, "4 hr": 15}
 RESAMPLE_INTERVALS = {"4 hr": "4h"}  # label -> pandas resample rule, applied after fetch
-WMA_WINDOW = 5
-LSMA_WINDOW = 7
-VOL_SMA_WINDOW = 10
+WMA_WINDOW = 10
+LSMA_WINDOW = 13
+VOL_SMA_WINDOW = 21
 
 UNDERLYINGS = [
     "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
